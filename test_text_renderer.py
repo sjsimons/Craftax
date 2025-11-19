@@ -29,12 +29,11 @@ def main():
     print("AFTER 10 RANDOM ACTIONS")
     print("=" * 80)
 
-    step_fn = jax.jit(env.step)
-
+    # Note: Not using JIT for simplicity in this test script
     for i in range(10):
-        rng, action_rng = jax.random.split(rng)
+        rng, action_rng, step_rng = jax.random.split(rng, 3)
         action = jax.random.randint(action_rng, (), 0, env.action_space(env_params).n)
-        obs, state, reward, done, info = step_fn(rng, state, action, env_params)
+        obs, state, reward, done, info = env.step(step_rng, state, action, env_params)
         if reward != 0:
             print(f"Step {i+1}: Action {action}, Reward: {reward}")
 
