@@ -728,3 +728,115 @@ def render_pixels_empty(block_pixel_size):
         dtype=jnp.float32,
     )
     return pixels
+
+
+def render_craftax_text(state):
+    text_obs = "Map:\n"
+
+    # Map
+    obs_dim_array = jnp.array([OBS_DIM[0], OBS_DIM[1]], dtype=jnp.int32)
+
+    # Map
+    padded_grid = jnp.pad(
+        state.map,
+        (MAX_OBS_DIM + 2, MAX_OBS_DIM + 2),
+        constant_values=BlockType.OUT_OF_BOUNDS.value,
+    )
+
+    tl_corner = state.player_position - obs_dim_array // 2 + MAX_OBS_DIM + 2
+
+    map_view = jax.lax.dynamic_slice(padded_grid, tl_corner, OBS_DIM)
+
+    # Mobs
+    mob_map = jnp.zeros((*OBS_DIM, 4), dtype=jnp.int32)  # 4 types: zombie, cow, skeleton, arrow
+
+    def _add_mob_to_map(carry, mob_index):
+        mob_map, mobs, mob_type_index = carry
+
+        local_position = (
+            mobs.position[mob_index]
+            - state.player_position
+            + jnp.array([OBS_DIM[0], OBS_DIM[1]]) // 2
+        )
+        on_screen = jnp.logical_and(
+            local_position >= 0, local_position < jnp.array([OBS_DIM[0], OBS_DIM[1]])
+        ).all()
+        on_screen *= mobs.mask[mob_index]
+
+        mob_map = mob_map.at[local_position[0], local_position[1], mob_type_index].set(
+            on_screen.astype(jnp.int32)
+        )
+
+        return (mob_map, mobs, mob_type_index), None
+
+    (mob_map, _, _), _ = jax.lax.scan(
+        _add_mob_to_map,
+        (mob_map, state.zombies, 0),
+        jnp.arange(state.zombies.mask.shape[0]),
+    )
+    (mob_map, _, _), _ = jax.lax.scan(
+        _add_mob_to_map,
+        (mob_map, state.cows, 1),
+        jnp.arange(state.cows.mask.shape[0]),
+    )
+    (mob_map, _, _), _ = jax.lax.scan(
+        _add_mob_to_map,
+        (mob_map, state.skeletons, 2),
+        jnp.arange(state.skeletons.mask.shape[0]),
+    )
+    (mob_map, _, _), _ = jax.lax.scan(
+        _add_mob_to_map,
+        (mob_map, state.arrows, 3),
+        jnp.arange(state.arrows.mask.shape[0]),
+    )
+
+    def mob_id_to_name(id):
+        if id == 0:
+            return "Zombie"
+        elif id == 1:
+            return "Cow"
+        elif id == 2:
+            return "Skeleton"
+        elif id == 3:
+            return "Arrow"
+
+    for x in range(OBS_DIM[0]):
+        for y in range(OBS_DIM[1]):
+            text_obs += f"{y - OBS_DIM[1] // 2}, {x - OBS_DIM[0] // 2}: "
+            if mob_map[x, y].max() > 0.5:
+                text_obs += mob_id_to_name(mob_map[x, y].argmax()) + " on "
+            text_obs += BlockType(map_view[x, y]).name.lower() + "\n"
+
+    # Inventory
+    text_obs += "\nInventory:\n"
+    text_obs += f"Wood: {state.inventory.wood}\n"
+    text_obs += f"Stone: {state.inventory.stone}\n"
+    text_obs += f"Coal: {state.inventory.coal}\n"
+    text_obs += f"Iron: {state.inventory.iron}\n"
+    text_obs += f"Diamond: {state.inventory.diamond}\n"
+    text_obs += f"Sapling: {state.inventory.sapling}\n"
+
+    if state.inventory.wood_pickaxe > 0:
+        text_obs += "Wood Pickaxe\n"
+    if state.inventory.stone_pickaxe > 0:
+        text_obs += "Stone Pickaxe\n"
+    if state.inventory.iron_pickaxe > 0:
+        text_obs += "Iron Pickaxe\n"
+    if state.inventory.wood_sword > 0:
+        text_obs += "Wood Sword\n"
+    if state.inventory.stone_sword > 0:
+        text_obs += "Stone Sword\n"
+    if state.inventory.iron_sword > 0:
+        text_obs += "Iron Sword\n"
+
+    text_obs += f"Health: {state.player_health}\n"
+    text_obs += f"Food: {state.player_food}\n"
+    text_obs += f"Drink: {state.player_drink}\n"
+    text_obs += f"Energy: {state.player_energy}\n"
+
+    text_obs += f"Direction: {Action(state.player_direction).name.lower()}\n"
+
+    text_obs += f"Light: {state.light_level}\n"
+    text_obs += f"Is Sleeping: {state.is_sleeping}\n"
+
+    return text_obs
