@@ -15,19 +15,44 @@ from pathlib import Path
 from typing import List, Callable, Any, Optional, Dict, Tuple
 
 
+def action_to_text(action: int) -> str:
+    """Convert action number to text description."""
+    action_descriptions = {
+        0: "do nothing",
+        1: "move left",
+        2: "move right",
+        3: "move up",
+        4: "move down",
+        5: "interact with object in front",
+        6: "sleep",
+        7: "place stone",
+        8: "place crafting table",
+        9: "place furnace",
+        10: "place plant",
+        11: "craft wooden pickaxe",
+        12: "craft stone pickaxe",
+        13: "craft iron pickaxe",
+        14: "craft wooden sword",
+        15: "craft stone sword",
+        16: "craft iron sword",
+    }
+    return action_descriptions.get(action, f"unknown action {action}")
+
+
 @dataclass
 class CraftaxTransition:
     """A single transition in text format."""
     id: str
     text_state: str
     action: int
+    text_action: str
     text_next_state: str
     file_path: str
     step_idx: int
 
     def __repr__(self):
         text_preview = self.text_state[:50] + "..." if len(self.text_state) > 50 else self.text_state
-        return f"CraftaxTransition(id='{self.id}', action={self.action}, text='{text_preview}')"
+        return f"CraftaxTransition(id='{self.id}', action={self.text_action}, text='{text_preview}')"
 
 
 class TrajectoryTextConverter:
@@ -102,11 +127,13 @@ class TrajectoryTextConverter:
 
             text_state = self.render_function(state, **self.render_kwargs)
             text_next_state = self.render_function(next_state, **self.render_kwargs)
+            text_action = action_to_text(int(action))
 
             transition = CraftaxTransition(
                 id=tid,
                 text_state=text_state,
                 action=int(action),
+                text_action=text_action,
                 text_next_state=text_next_state,
                 file_path=self.file_path,
                 step_idx=step_idx,
