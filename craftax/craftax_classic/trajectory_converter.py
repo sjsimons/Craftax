@@ -3,9 +3,13 @@ Trajectory to text converter - Portable module for converting trajectory data to
 
 This module is designed to be portable across codebases. To use in a different project:
 1. Copy this file to your project
-2. Implement your own render_function that takes a state and returns text
+2. Copy standalone_craftax_wrapper.py to your project (for Craftax Classic)
+   OR implement your own render_function that takes a state and returns text
 3. Implement your own load_trajectory_file function for your file format
 4. Use the TrajectoryTextConverter with your custom functions
+
+Note: The default Craftax converter uses standalone_craftax_wrapper.py for text rendering.
+      If standalone_craftax_wrapper.py is not available, it falls back to the internal renderer.
 """
 
 import os
@@ -245,10 +249,28 @@ def craftax_render_function(state, unique_items=True, precise_location=False):
     """
     Craftax-specific render function.
 
+    Uses the standalone wrapper's text renderer for consistency.
     To use with a different environment, replace this with your own render function.
+
+    Note: This requires standalone_craftax_wrapper.py to be in your Python path.
+          If using in a different project, copy standalone_craftax_wrapper.py
+          to your project directory.
     """
-    from craftax.craftax_classic.renderer import render_craftax_text_balrog
-    return render_craftax_text_balrog(state, unique_items, precise_location)
+    try:
+        from standalone_craftax_wrapper import CraftaxClassicLanguageWrapper
+    except ImportError:
+        # Fallback to internal renderer if standalone wrapper not available
+        from craftax.craftax_classic.renderer import render_craftax_text_balrog
+        return render_craftax_text_balrog(state, unique_items, precise_location)
+
+    # Create a temporary wrapper instance with the desired config
+    wrapper = CraftaxClassicLanguageWrapper(
+        unique_items=unique_items,
+        precise_location=precise_location
+    )
+
+    # Use the wrapper's text renderer
+    return wrapper._render_text(state)
 
 
 def craftax_load_trajectory(file_path: str) -> Dict[str, List]:
