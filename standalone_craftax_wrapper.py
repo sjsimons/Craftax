@@ -67,7 +67,7 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         """Step environment and return observations with text."""
         symbolic_obs, state, reward, done, info = super().step_env(rng, state, action, params)
 
-        # Generate text observation using self-contained renderer
+        # Generate text observation (note: this happens outside of traced computation)
         text_obs = self._render_text(state)
 
         obs = {
@@ -83,7 +83,7 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         """Reset environment and return observations with text."""
         symbolic_obs, state = super().reset_env(rng, params)
 
-        # Generate text observation using self-contained renderer
+        # Generate text observation (note: this happens outside of traced computation)
         text_obs = self._render_text(state)
 
         obs = {
@@ -107,13 +107,20 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
 
         This is completely self-contained and doesn't depend on any
         internal craftax rendering modules.
+
+        Note: Converts JAX arrays to numpy/Python values to avoid issues during JIT compilation.
         """
+        import numpy as np
+
         result = ""
 
-        # Status section (sleeping/dead)
-        if state.is_sleeping:
+        # Status section (sleeping/dead) - convert to Python values
+        is_sleeping = bool(np.array(state.is_sleeping))
+        player_health = int(np.array(state.player_health))
+
+        if is_sleeping:
             result += "You are sleeping, and will not be able take actions until energy is full.\n\n"
-        elif state.player_health <= 0:
+        elif player_health <= 0:
             result += "You died.\n\n"
 
         # Get map view
@@ -167,22 +174,29 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         }
 
         center = (OBS_DIM[0] // 2, OBS_DIM[1] // 2)
-        facing_offset = direction_offsets.get(int(state.player_direction), (0, 0))
+        player_direction = int(np.array(state.player_direction))
+        facing_offset = direction_offsets.get(player_direction, (0, 0))
         facing_pos = (center[0] + facing_offset[0], center[1] + facing_offset[1])
 
         if 0 <= facing_pos[0] < OBS_DIM[0] and 0 <= facing_pos[1] < OBS_DIM[1]:
-            if mob_map[facing_pos[0], facing_pos[1]].max() > 0.5:
-                mob_id = int(mob_map[facing_pos[0], facing_pos[1]].argmax())
+            # Convert to numpy for conditional checks
+            facing_mob_vals = np.array(mob_map[facing_pos[0], facing_pos[1]])
+            if facing_mob_vals.max() > 0.5:
+                mob_id = int(facing_mob_vals.argmax())
                 mob_names = ["zombie", "cow", "skeleton", "arrow"]
                 facing_item = mob_names[mob_id]
             else:
-                facing_block = int(map_view[facing_pos[0], facing_pos[1]])
+                facing_block = int(np.array(map_view[facing_pos[0], facing_pos[1]]))
                 if facing_block in [BlockType.GRASS.value, BlockType.PATH.value]:
                     facing_item = "nothing"
                 else:
                     facing_item = BlockType(facing_block).name.lower()
         else:
             facing_item = "nothing"
+
+        # Convert to numpy for iteration
+        mob_map_np = np.array(mob_map)
+        map_view_np = np.array(map_view)
 
         # Collect all visible objects
         obj_info_list = []
@@ -195,13 +209,13 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
                 dy = x - center[0]
 
                 # Check for mobs
-                if mob_map[x, y].max() > 0.5:
-                    mob_id = int(mob_map[x, y].argmax())
+                if mob_map_np[x, y].max() > 0.5:
+                    mob_id = int(mob_map_np[x, y].argmax())
                     mob_names = ["zombie", "cow", "skeleton", "arrow"]
                     obj_info_list.append((mob_names[mob_id], dx, dy))
 
                 # Check for blocks (skip grass and path)
-                block_type = int(map_view[x, y])
+                block_type = int(map_view_np[x, y])
                 if block_type not in [BlockType.GRASS.value, BlockType.PATH.value,
                                      BlockType.OUT_OF_BOUNDS.value, BlockType.INVALID.value]:
                     obj_info_list.append((BlockType(block_type).name.lower(), dx, dy))
@@ -226,41 +240,53 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         result += env_desc + "\n\n"
         result += f"You face {facing_item} at your front.\n\n"
 
-        # Status section
+        # Status section - convert to Python ints
         status_lines = [
-            f"- health: {state.player_health}/9",
-            f"- food: {state.player_food}/9",
-            f"- drink: {state.player_drink}/9",
-            f"- energy: {state.player_energy}/9",
+            f"- health: {int(np.array(state.player_health))}/9",
+            f"- food: {int(np.array(state.player_food))}/9",
+            f"- drink: {int(np.array(state.player_drink))}/9",
+            f"- energy: {int(np.array(state.player_energy))}/9",
         ]
         result += "Your status:\n" + "\n".join(status_lines) + "\n\n"
 
-        # Inventory items
+        # Inventory items - convert to Python ints
         inventory_items = []
-        if state.inventory.wood > 0:
-            inventory_items.append(f"- wood: {state.inventory.wood}")
-        if state.inventory.stone > 0:
-            inventory_items.append(f"- stone: {state.inventory.stone}")
-        if state.inventory.coal > 0:
-            inventory_items.append(f"- coal: {state.inventory.coal}")
-        if state.inventory.iron > 0:
-            inventory_items.append(f"- iron: {state.inventory.iron}")
-        if state.inventory.diamond > 0:
-            inventory_items.append(f"- diamond: {state.inventory.diamond}")
-        if state.inventory.sapling > 0:
-            inventory_items.append(f"- sapling: {state.inventory.sapling}")
-        if state.inventory.wood_pickaxe > 0:
-            inventory_items.append(f"- wood_pickaxe: {state.inventory.wood_pickaxe}")
-        if state.inventory.stone_pickaxe > 0:
-            inventory_items.append(f"- stone_pickaxe: {state.inventory.stone_pickaxe}")
-        if state.inventory.iron_pickaxe > 0:
-            inventory_items.append(f"- iron_pickaxe: {state.inventory.iron_pickaxe}")
-        if state.inventory.wood_sword > 0:
-            inventory_items.append(f"- wood_sword: {state.inventory.wood_sword}")
-        if state.inventory.stone_sword > 0:
-            inventory_items.append(f"- stone_sword: {state.inventory.stone_sword}")
-        if state.inventory.iron_sword > 0:
-            inventory_items.append(f"- iron_sword: {state.inventory.iron_sword}")
+        wood = int(np.array(state.inventory.wood))
+        if wood > 0:
+            inventory_items.append(f"- wood: {wood}")
+        stone = int(np.array(state.inventory.stone))
+        if stone > 0:
+            inventory_items.append(f"- stone: {stone}")
+        coal = int(np.array(state.inventory.coal))
+        if coal > 0:
+            inventory_items.append(f"- coal: {coal}")
+        iron = int(np.array(state.inventory.iron))
+        if iron > 0:
+            inventory_items.append(f"- iron: {iron}")
+        diamond = int(np.array(state.inventory.diamond))
+        if diamond > 0:
+            inventory_items.append(f"- diamond: {diamond}")
+        sapling = int(np.array(state.inventory.sapling))
+        if sapling > 0:
+            inventory_items.append(f"- sapling: {sapling}")
+        wood_pickaxe = int(np.array(state.inventory.wood_pickaxe))
+        if wood_pickaxe > 0:
+            inventory_items.append(f"- wood_pickaxe: {wood_pickaxe}")
+        stone_pickaxe = int(np.array(state.inventory.stone_pickaxe))
+        if stone_pickaxe > 0:
+            inventory_items.append(f"- stone_pickaxe: {stone_pickaxe}")
+        iron_pickaxe = int(np.array(state.inventory.iron_pickaxe))
+        if iron_pickaxe > 0:
+            inventory_items.append(f"- iron_pickaxe: {iron_pickaxe}")
+        wood_sword = int(np.array(state.inventory.wood_sword))
+        if wood_sword > 0:
+            inventory_items.append(f"- wood_sword: {wood_sword}")
+        stone_sword = int(np.array(state.inventory.stone_sword))
+        if stone_sword > 0:
+            inventory_items.append(f"- stone_sword: {stone_sword}")
+        iron_sword = int(np.array(state.inventory.iron_sword))
+        if iron_sword > 0:
+            inventory_items.append(f"- iron_sword: {iron_sword}")
 
         if inventory_items:
             result += "Your inventory:\n" + "\n".join(inventory_items)
