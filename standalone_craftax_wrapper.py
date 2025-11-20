@@ -68,69 +68,32 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         action: int,
         params: EnvParams = None,
     ):
-        """
-        Override step to add text observation after JIT-compiled step.
-
-        This allows the base environment to be JIT-compiled while text
-        generation happens outside the traced computation.
-        """
-        # Call parent's JIT-compiled step (returns symbolic obs only)
+        """Step environment and return observations with text."""
         symbolic_obs, state, reward, done, info = super().step(key, state, action, params)
-
-        # Generate text observation outside of JIT
         text_obs = self._render_text(state)
 
-        # Combine observations
-        obs = {
-            "symbolic": symbolic_obs,
-            "text": text_obs,
-        }
-
+        obs = {"symbolic": symbolic_obs, "text": text_obs}
         return obs, state, reward, done, info
 
     def reset(self, key: jax.Array, params: EnvParams = None):
-        """
-        Override reset to add text observation after JIT-compiled reset.
-
-        This allows the base environment to be JIT-compiled while text
-        generation happens outside the traced computation.
-        """
-        # Call parent's JIT-compiled reset (returns symbolic obs only)
+        """Reset environment and return observations with text."""
         symbolic_obs, state = super().reset(key, params)
-
-        # Generate text observation outside of JIT
         text_obs = self._render_text(state)
 
-        # Combine observations
-        obs = {
-            "symbolic": symbolic_obs,
-            "text": text_obs,
-        }
-
+        obs = {"symbolic": symbolic_obs, "text": text_obs}
         return obs, state
 
     @property
     def name(self) -> str:
         return "Craftax-Classic-Language-Wrapper-v1"
 
-    # =========================================================================
-    # Self-contained rendering logic (no internal dependencies)
-    # =========================================================================
-
     def _render_text(self, state: EnvState) -> str:
-        """
-        Render state as text in BALROG format.
-
-        This is completely self-contained and doesn't depend on any
-        internal craftax rendering modules.
-
-        Note: Converts JAX arrays to numpy/Python values to avoid issues during JIT compilation.
-        """
+        """Render state as text in BALROG format."""
         import numpy as np
 
         result = ""
 
-        # Status section (sleeping/dead) - convert to Python values
+        # Status alerts
         is_sleeping = bool(np.array(state.is_sleeping))
         player_health = int(np.array(state.player_health))
 
@@ -149,7 +112,7 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         tl_corner = state.player_position - obs_dim_array // 2 + MAX_OBS_DIM + 2
         map_view = jax.lax.dynamic_slice(padded_grid, tl_corner, OBS_DIM)
 
-        # Get mobs view
+        # Build mob map
         mob_map = jnp.zeros((*OBS_DIM, 4), dtype=jnp.int32)
 
         def _add_mob_to_map(carry, mob_index):
@@ -182,20 +145,13 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         )
 
         # Determine what player is facing
-        direction_offsets = {
-            1: (0, -1),  # left
-            2: (0, 1),   # right
-            3: (-1, 0),  # up
-            4: (1, 0),   # down
-        }
-
+        direction_offsets = {1: (0, -1), 2: (0, 1), 3: (-1, 0), 4: (1, 0)}
         center = (OBS_DIM[0] // 2, OBS_DIM[1] // 2)
         player_direction = int(np.array(state.player_direction))
         facing_offset = direction_offsets.get(player_direction, (0, 0))
         facing_pos = (center[0] + facing_offset[0], center[1] + facing_offset[1])
 
         if 0 <= facing_pos[0] < OBS_DIM[0] and 0 <= facing_pos[1] < OBS_DIM[1]:
-            # Convert to numpy for conditional checks
             facing_mob_vals = np.array(mob_map[facing_pos[0], facing_pos[1]])
             if facing_mob_vals.max() > 0.5:
                 mob_id = int(facing_mob_vals.argmax())
@@ -210,33 +166,30 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         else:
             facing_item = "nothing"
 
-        # Convert to numpy for iteration
+        # Collect visible objects
         mob_map_np = np.array(mob_map)
         map_view_np = np.array(map_view)
-
-        # Collect all visible objects
         obj_info_list = []
+
         for x in range(OBS_DIM[0]):
             for y in range(OBS_DIM[1]):
                 if x == center[0] and y == center[1]:
-                    continue  # Skip player position
+                    continue
 
                 dx = y - center[1]
                 dy = x - center[0]
 
-                # Check for mobs
                 if mob_map_np[x, y].max() > 0.5:
                     mob_id = int(mob_map_np[x, y].argmax())
                     mob_names = ["zombie", "cow", "skeleton", "arrow"]
                     obj_info_list.append((mob_names[mob_id], dx, dy))
 
-                # Check for blocks (skip grass and path)
                 block_type = int(map_view_np[x, y])
                 if block_type not in [BlockType.GRASS.value, BlockType.PATH.value,
                                      BlockType.OUT_OF_BOUNDS.value, BlockType.INVALID.value]:
                     obj_info_list.append((BlockType(block_type).name.lower(), dx, dy))
 
-        # Filter to unique items if requested
+        # Filter to closest of each item type if requested
         if self.unique_items:
             closest_items = {}
             for item_name, dx, dy in obj_info_list:
@@ -245,7 +198,7 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
                     closest_items[item_name] = (distance, dx, dy)
             obj_info_list = [(name, dx, dy) for name, (_, dx, dy) in closest_items.items()]
 
-        # Format environment description
+        # Format visible objects
         if obj_info_list:
             env_desc = "You see:\n" + "\n".join(
                 [f"- {name} {self._describe_location(dx, dy)}" for name, dx, dy in obj_info_list]
@@ -256,7 +209,7 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         result += env_desc + "\n\n"
         result += f"You face {facing_item} at your front.\n\n"
 
-        # Status section - convert to Python ints
+        # Player status
         status_lines = [
             f"- health: {int(np.array(state.player_health))}/9",
             f"- food: {int(np.array(state.player_food))}/9",
@@ -265,7 +218,7 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         ]
         result += "Your status:\n" + "\n".join(status_lines) + "\n\n"
 
-        # Inventory items - convert to Python ints
+        # Inventory
         inventory_items = []
         wood = int(np.array(state.inventory.wood))
         if wood > 0:

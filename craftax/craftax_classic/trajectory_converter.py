@@ -1,15 +1,12 @@
 """
-Trajectory to text converter - Portable module for converting trajectory data to text observations.
+Trajectory to text converter - converts trajectory data to text observations.
 
-This module is designed to be portable across codebases. To use in a different project:
-1. Copy this file to your project
-2. Copy standalone_craftax_wrapper.py to your project (for Craftax Classic)
-   OR implement your own render_function that takes a state and returns text
-3. Implement your own load_trajectory_file function for your file format
-4. Use the TrajectoryTextConverter with your custom functions
+To use with different environments:
+1. Provide a render_function that converts state to text
+2. Provide a load_trajectory_function for your file format
+3. Use TrajectoryTextConverter with your custom functions
 
-Note: The default Craftax converter uses standalone_craftax_wrapper.py for text rendering.
-      If standalone_craftax_wrapper.py is not available, it falls back to the internal renderer.
+For Craftax Classic: Uses standalone_craftax_wrapper.py renderer with internal fallback.
 """
 
 import os
@@ -20,19 +17,13 @@ from typing import List, Callable, Any, Optional, Dict, Tuple
 
 @dataclass
 class CraftaxTransition:
-    """
-    A single transition in text format.
-
-    This dataclass is generic and can be used with any environment.
-    """
-    id: str  # Unique identifier (e.g., "run1_005")
-    text_state: str  # Current state as text
-    action: int  # Action taken
-    text_next_state: str  # Next state as text
-
-    # Metadata for retrieval
-    file_path: str  # Path to original file
-    step_idx: int  # Step index in the trajectory
+    """A single transition in text format."""
+    id: str
+    text_state: str
+    action: int
+    text_next_state: str
+    file_path: str
+    step_idx: int
 
     def __repr__(self):
         text_preview = self.text_state[:50] + "..." if len(self.text_state) > 50 else self.text_state
@@ -41,19 +32,13 @@ class CraftaxTransition:
 
 class TrajectoryTextConverter:
     """
-    Generic converter for trajectory files to text transitions.
-
-    Design principles for portability:
-    - Takes a render_function as input (swap for different environments)
-    - Takes a load_function as input (swap for different file formats)
-    - Stores minimal state (just file index for on-demand loading)
-    - No hard dependencies on specific environment implementations
+    Converter for trajectory files to text transitions.
 
     Args:
         render_function: Function that takes (state, **kwargs) and returns text string
         load_trajectory_function: Function that takes file_path and returns trajectory dict
                                  Expected dict format: {'state': [...], 'action': [...], ...}
-        render_kwargs: Keyword arguments to pass to render_function (e.g., unique_items=True)
+        render_kwargs: Keyword arguments to pass to render_function
     """
 
     def __init__(
@@ -65,9 +50,7 @@ class TrajectoryTextConverter:
         self.render_function = render_function
         self.load_trajectory_function = load_trajectory_function
         self.render_kwargs = render_kwargs or {}
-
-        # File index for on-demand state retrieval
-        self._file_index: Dict[str, str] = {}  # Maps file_id -> file_path
+        self._file_index: Dict[str, str] = {}
 
     def convert_file(
         self,
@@ -85,30 +68,25 @@ class TrajectoryTextConverter:
             List of CraftaxTransition objects
         """
         if file_id is None:
-            file_id = Path(file_path).stem  # e.g., "run1" from "run1.pbz2"
+            file_id = Path(file_path).stem
 
-        # Store file path for on-demand loading
         self._file_index[file_id] = file_path
 
-        # Load trajectory
         trajectory = self.load_trajectory_function(file_path)
         states = trajectory['state']
         actions = trajectory['action']
 
-        # Convert to transitions
         transitions = []
-        for i in range(len(states) - 1):  # -1 because we need next_state
+        for i in range(len(states) - 1):
             state = states[i]
             next_state = states[i + 1]
             action = actions[i]
 
-            # Render states to text
             text_state = self.render_function(state, **self.render_kwargs)
             text_next_state = self.render_function(next_state, **self.render_kwargs)
 
-            # Create transition
             transition = CraftaxTransition(
-                id=f"{file_id}_{i:06d}",  # e.g., "run1_000005"
+                id=f"{file_id}_{i:06d}",
                 text_state=text_state,
                 action=int(action),
                 text_next_state=text_next_state,
@@ -151,18 +129,7 @@ class TrajectoryTextConverter:
         return all_transitions
 
     def get_state_by_id(self, transition_id: str) -> Any:
-        """
-        Retrieve the original state object for a transition ID.
-
-        This enables on-demand loading without keeping all states in memory.
-
-        Args:
-            transition_id: Transition ID (e.g., "run1_000005")
-
-        Returns:
-            The original state object
-        """
-        # Parse ID
+        """Retrieve the original state object for a transition ID."""
         parts = transition_id.rsplit('_', 1)
         if len(parts) != 2:
             raise ValueError(f"Invalid transition ID format: {transition_id}")
@@ -170,13 +137,10 @@ class TrajectoryTextConverter:
         file_id, step_str = parts
         step_idx = int(step_str)
 
-        # Get file path
         if file_id not in self._file_index:
-            raise ValueError(f"Unknown file_id: {file_id}. Was this trajectory converted?")
+            raise ValueError(f"Unknown file_id: {file_id}")
 
         file_path = self._file_index[file_id]
-
-        # Load and return state
         trajectory = self.load_trajectory_function(file_path)
         states = trajectory['state']
 
@@ -190,17 +154,7 @@ class TrajectoryTextConverter:
         transition_id: str,
         include_states: bool = False,
     ) -> CraftaxTransition:
-        """
-        Retrieve a full transition by ID, optionally including original state objects.
-
-        Args:
-            transition_id: Transition ID (e.g., "run1_000005")
-            include_states: If True, loads and includes original states (memory intensive)
-
-        Returns:
-            CraftaxTransition object (re-rendered from original states)
-        """
-        # Parse ID
+        """Retrieve a full transition by ID."""
         parts = transition_id.rsplit('_', 1)
         if len(parts) != 2:
             raise ValueError(f"Invalid transition ID format: {transition_id}")
@@ -208,13 +162,10 @@ class TrajectoryTextConverter:
         file_id, step_str = parts
         step_idx = int(step_str)
 
-        # Get file path
         if file_id not in self._file_index:
             raise ValueError(f"Unknown file_id: {file_id}")
 
         file_path = self._file_index[file_id]
-
-        # Load trajectory
         trajectory = self.load_trajectory_function(file_path)
         states = trajectory['state']
         actions = trajectory['action']
@@ -222,12 +173,10 @@ class TrajectoryTextConverter:
         if step_idx >= len(states) - 1:
             raise ValueError(f"Step index {step_idx} out of range")
 
-        # Get states
         state = states[step_idx]
         next_state = states[step_idx + 1]
         action = actions[step_idx]
 
-        # Render to text
         text_state = self.render_function(state, **self.render_kwargs)
         text_next_state = self.render_function(next_state, **self.render_kwargs)
 
@@ -241,59 +190,29 @@ class TrajectoryTextConverter:
         )
 
 
-# ============================================================================
-# Craftax-specific utilities (swap these out for different projects)
-# ============================================================================
-
 def craftax_render_function(state, unique_items=True, precise_location=False):
-    """
-    Craftax-specific render function.
-
-    Uses the standalone wrapper's text renderer for consistency.
-    To use with a different environment, replace this with your own render function.
-
-    Note: This requires standalone_craftax_wrapper.py to be in your Python path.
-          If using in a different project, copy standalone_craftax_wrapper.py
-          to your project directory.
-    """
+    """Render Craftax state to text using standalone wrapper (with internal fallback)."""
     try:
         from standalone_craftax_wrapper import CraftaxClassicLanguageWrapper
     except ImportError:
-        # Fallback to internal renderer if standalone wrapper not available
         from craftax.craftax_classic.renderer import render_craftax_text_balrog
         return render_craftax_text_balrog(state, unique_items, precise_location)
 
-    # Create a temporary wrapper instance with the desired config
     wrapper = CraftaxClassicLanguageWrapper(
         unique_items=unique_items,
         precise_location=precise_location
     )
-
-    # Use the wrapper's text renderer
     return wrapper._render_text(state)
 
 
 def craftax_load_trajectory(file_path: str) -> Dict[str, List]:
-    """
-    Craftax-specific trajectory loader.
-
-    To use with a different file format, replace this with your own loader.
-
-    Returns:
-        Dict with keys: 'state', 'action', 'reward', 'done'
-    """
+    """Load Craftax trajectory file."""
     from craftax.environment_base.util import load_compressed_pickle
     return load_compressed_pickle(file_path)
 
 
 def make_craftax_converter(unique_items=True, precise_location=False):
-    """
-    Factory function to create a converter configured for Craftax Classic.
-
-    Example:
-        converter = make_craftax_converter(unique_items=True)
-        transitions = converter.convert_directory("data/trajectories/")
-    """
+    """Create a converter configured for Craftax Classic."""
     return TrajectoryTextConverter(
         render_function=craftax_render_function,
         load_trajectory_function=craftax_load_trajectory,
