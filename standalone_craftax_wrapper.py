@@ -61,20 +61,26 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         self.unique_items = unique_items
         self.precise_location = precise_location
 
-    def step_env(
-        self, rng: jax.Array, state: EnvState, action: int, params: EnvParams
-    ) -> Tuple[Dict[str, Any], EnvState, float, bool, dict]:
-        """Step environment and return observations with text."""
-        symbolic_obs, state, reward, done, info = super().step_env(rng, state, action, params)
+    def step(
+        self,
+        key: jax.Array,
+        state: EnvState,
+        action: int,
+        params: EnvParams = None,
+    ):
+        """
+        Override step to add text observation after JIT-compiled step.
 
-        # Use pure_callback to escape JIT tracing for text generation
-        # This allows the wrapper to be JIT-compiled while text rendering happens outside tracing
-        text_obs = jax.pure_callback(
-            self._render_text,
-            jax.ShapeDtypeStruct((), object),  # Result is a Python string (object dtype)
-            state,
-        )
+        This allows the base environment to be JIT-compiled while text
+        generation happens outside the traced computation.
+        """
+        # Call parent's JIT-compiled step (returns symbolic obs only)
+        symbolic_obs, state, reward, done, info = super().step(key, state, action, params)
 
+        # Generate text observation outside of JIT
+        text_obs = self._render_text(state)
+
+        # Combine observations
         obs = {
             "symbolic": symbolic_obs,
             "text": text_obs,
@@ -82,20 +88,20 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
 
         return obs, state, reward, done, info
 
-    def reset_env(
-        self, rng: jax.Array, params: EnvParams
-    ) -> Tuple[Dict[str, Any], EnvState]:
-        """Reset environment and return observations with text."""
-        symbolic_obs, state = super().reset_env(rng, params)
+    def reset(self, key: jax.Array, params: EnvParams = None):
+        """
+        Override reset to add text observation after JIT-compiled reset.
 
-        # Use pure_callback to escape JIT tracing for text generation
-        # This allows the wrapper to be JIT-compiled while text rendering happens outside tracing
-        text_obs = jax.pure_callback(
-            self._render_text,
-            jax.ShapeDtypeStruct((), object),  # Result is a Python string (object dtype)
-            state,
-        )
+        This allows the base environment to be JIT-compiled while text
+        generation happens outside the traced computation.
+        """
+        # Call parent's JIT-compiled reset (returns symbolic obs only)
+        symbolic_obs, state = super().reset(key, params)
 
+        # Generate text observation outside of JIT
+        text_obs = self._render_text(state)
+
+        # Combine observations
         obs = {
             "symbolic": symbolic_obs,
             "text": text_obs,
