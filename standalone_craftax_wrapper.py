@@ -67,8 +67,14 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         """Step environment and return observations with text."""
         symbolic_obs, state, reward, done, info = super().step_env(rng, state, action, params)
 
-        # Generate text observation (note: this happens outside of traced computation)
-        text_obs = self._render_text(state)
+        # Use pure_callback to escape JIT tracing for text generation
+        # This allows the wrapper to be JIT-compiled while text rendering happens outside tracing
+        text_obs = jax.pure_callback(
+            self._render_text,
+            jax.ShapeDtypeStruct((), object),  # Result is a Python string (object dtype)
+            state,
+            vectorized=False
+        )
 
         obs = {
             "symbolic": symbolic_obs,
@@ -83,8 +89,14 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
         """Reset environment and return observations with text."""
         symbolic_obs, state = super().reset_env(rng, params)
 
-        # Generate text observation (note: this happens outside of traced computation)
-        text_obs = self._render_text(state)
+        # Use pure_callback to escape JIT tracing for text generation
+        # This allows the wrapper to be JIT-compiled while text rendering happens outside tracing
+        text_obs = jax.pure_callback(
+            self._render_text,
+            jax.ShapeDtypeStruct((), object),  # Result is a Python string (object dtype)
+            state,
+            vectorized=False
+        )
 
         obs = {
             "symbolic": symbolic_obs,
