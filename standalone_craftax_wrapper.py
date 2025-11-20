@@ -73,7 +73,6 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
             self._render_text,
             jax.ShapeDtypeStruct((), object),  # Result is a Python string (object dtype)
             state,
-            vectorized=False
         )
 
         obs = {
@@ -95,7 +94,6 @@ class CraftaxClassicLanguageWrapper(CraftaxClassicSymbolicEnvNoAutoReset):
             self._render_text,
             jax.ShapeDtypeStruct((), object),  # Result is a Python string (object dtype)
             state,
-            vectorized=False
         )
 
         obs = {
