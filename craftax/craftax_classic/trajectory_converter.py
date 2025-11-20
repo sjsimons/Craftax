@@ -6,7 +6,7 @@ To use with different environments:
 2. Provide a load_trajectory_function for your file format
 3. Use TrajectoryTextConverter with your custom functions
 
-For Craftax Classic: Uses standalone_craftax_wrapper.py renderer with internal fallback.
+For Craftax Classic: Uses standalone_craftax_wrapper.py renderer.
 """
 
 import os
@@ -191,12 +191,8 @@ class TrajectoryTextConverter:
 
 
 def craftax_render_function(state, unique_items=True, precise_location=False):
-    """Render Craftax state to text using standalone wrapper (with internal fallback)."""
-    try:
-        from standalone_craftax_wrapper import CraftaxClassicLanguageWrapper
-    except ImportError:
-        from craftax.craftax_classic.renderer import render_craftax_text_balrog
-        return render_craftax_text_balrog(state, unique_items, precise_location)
+    """Render Craftax state to text using standalone wrapper."""
+    from standalone_craftax_wrapper import CraftaxClassicLanguageWrapper
 
     wrapper = CraftaxClassicLanguageWrapper(
         unique_items=unique_items,
