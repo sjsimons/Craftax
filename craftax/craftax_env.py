@@ -51,6 +51,12 @@ def make_craftax_env_from_name(name: str, auto_reset: bool):
             )
 
             return CraftaxClassicPixelsEnvNoAutoReset()
+        elif name == "Craftax-Classic-Text-v1":
+            from craftax.craftax_classic.envs.craftax_language_env import (
+                CraftaxClassicTextEnvNoAutoReset,
+            )
+
+            return CraftaxClassicTextEnvNoAutoReset()
 
     raise ValueError(f"Unknown craftax environment: {name}")
 
