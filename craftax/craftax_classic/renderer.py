@@ -840,3 +840,215 @@ def render_craftax_text(state):
     text_obs += f"Is Sleeping: {state.is_sleeping}\n"
 
     return text_obs
+
+
+def render_craftax_text_balrog(state, unique_items=True, precise_location=False):
+    """
+    Render craftax_classic state as text following BALROG crafter format.
+
+    Args:
+        state: The craftax_classic environment state
+        unique_items: If True, only show closest instance of each item/mob type
+        precise_location: If True, use precise location format (e.g., "1 step north and 2 steps east")
+                         If False, use simple format (e.g., "3 steps to your north-east")
+
+    Returns:
+        String containing the text observation in BALROG format
+    """
+    result = ""
+
+    # Status section (sleeping/dead)
+    if state.is_sleeping:
+        result += "You are sleeping, and will not be able take actions until energy is full.\n\n"
+    elif state.player_health <= 0:
+        result += "You died.\n\n"
+
+    # Environment section
+    obs_dim_array = jnp.array([OBS_DIM[0], OBS_DIM[1]], dtype=jnp.int32)
+
+    # Get map view
+    padded_grid = jnp.pad(
+        state.map,
+        (MAX_OBS_DIM + 2, MAX_OBS_DIM + 2),
+        constant_values=BlockType.OUT_OF_BOUNDS.value,
+    )
+    tl_corner = state.player_position - obs_dim_array // 2 + MAX_OBS_DIM + 2
+    map_view = jax.lax.dynamic_slice(padded_grid, tl_corner, OBS_DIM)
+
+    # Get mobs view
+    mob_map = jnp.zeros((*OBS_DIM, 4), dtype=jnp.int32)
+
+    def _add_mob_to_map(carry, mob_index):
+        mob_map, mobs, mob_type_index = carry
+        local_position = (
+            mobs.position[mob_index]
+            - state.player_position
+            + jnp.array([OBS_DIM[0], OBS_DIM[1]]) // 2
+        )
+        on_screen = jnp.logical_and(
+            local_position >= 0, local_position < jnp.array([OBS_DIM[0], OBS_DIM[1]])
+        ).all()
+        on_screen *= mobs.mask[mob_index]
+        mob_map = mob_map.at[local_position[0], local_position[1], mob_type_index].set(
+            on_screen.astype(jnp.int32)
+        )
+        return (mob_map, mobs, mob_type_index), None
+
+    (mob_map, _, _), _ = jax.lax.scan(
+        _add_mob_to_map, (mob_map, state.zombies, 0), jnp.arange(state.zombies.mask.shape[0])
+    )
+    (mob_map, _, _), _ = jax.lax.scan(
+        _add_mob_to_map, (mob_map, state.cows, 1), jnp.arange(state.cows.mask.shape[0])
+    )
+    (mob_map, _, _), _ = jax.lax.scan(
+        _add_mob_to_map, (mob_map, state.skeletons, 2), jnp.arange(state.skeletons.mask.shape[0])
+    )
+    (mob_map, _, _), _ = jax.lax.scan(
+        _add_mob_to_map, (mob_map, state.arrows, 3), jnp.arange(state.arrows.mask.shape[0])
+    )
+
+    # Helper functions for location descriptions
+    def describe_loc_precise(dx, dy):
+        """Describe location in precise format: '1 step north and 2 steps east'"""
+        desc = []
+        if dy < 0:  # North
+            desc.append(f"{abs(dy)} step{'s' if abs(dy) > 1 else ''} north")
+        elif dy > 0:  # South
+            desc.append(f"{abs(dy)} step{'s' if abs(dy) > 1 else ''} south")
+        if dx < 0:  # West
+            desc.append(f"{abs(dx)} step{'s' if abs(dx) > 1 else ''} west")
+        elif dx > 0:  # East
+            desc.append(f"{abs(dx)} step{'s' if abs(dx) > 1 else ''} east")
+        return " and ".join(desc) if desc else "at your location"
+
+    def describe_loc_simple(dx, dy):
+        """Describe location in simple format: '3 steps to your north-east'"""
+        directions = []
+        if dy < 0:
+            directions.append("north")
+        elif dy > 0:
+            directions.append("south")
+        if dx < 0:
+            directions.append("west")
+        elif dx > 0:
+            directions.append("east")
+
+        distance = abs(dx) + abs(dy)
+        if distance == 0:
+            return "at your location"
+        return f"{distance} step{'s' if distance > 1 else ''} to your {'-'.join(directions)}"
+
+    describe_loc = describe_loc_precise if precise_location else describe_loc_simple
+
+    # Determine what player is facing (player direction: 1=left, 2=right, 3=up, 4=down)
+    direction_offsets = {
+        1: (0, -1),  # left
+        2: (0, 1),   # right
+        3: (-1, 0),  # up
+        4: (1, 0),   # down
+    }
+
+    center = (OBS_DIM[0] // 2, OBS_DIM[1] // 2)
+    facing_offset = direction_offsets.get(int(state.player_direction), (0, 0))
+    facing_pos = (center[0] + facing_offset[0], center[1] + facing_offset[1])
+
+    if 0 <= facing_pos[0] < OBS_DIM[0] and 0 <= facing_pos[1] < OBS_DIM[1]:
+        # Check for mob first
+        if mob_map[facing_pos[0], facing_pos[1]].max() > 0.5:
+            mob_id = int(mob_map[facing_pos[0], facing_pos[1]].argmax())
+            mob_names = ["zombie", "cow", "skeleton", "arrow"]
+            facing_item = mob_names[mob_id]
+        else:
+            facing_block = int(map_view[facing_pos[0], facing_pos[1]])
+            # Skip grass and path (too common/boring)
+            if facing_block in [BlockType.GRASS.value, BlockType.PATH.value]:
+                facing_item = "nothing"
+            else:
+                facing_item = BlockType(facing_block).name.lower()
+    else:
+        facing_item = "nothing"
+
+    # Collect all visible objects
+    obj_info_list = []
+    for x in range(OBS_DIM[0]):
+        for y in range(OBS_DIM[1]):
+            if x == center[0] and y == center[1]:
+                continue  # Skip player position
+
+            dx = y - center[1]
+            dy = x - center[0]
+
+            # Check for mobs
+            if mob_map[x, y].max() > 0.5:
+                mob_id = int(mob_map[x, y].argmax())
+                mob_names = ["zombie", "cow", "skeleton", "arrow"]
+                obj_info_list.append((mob_names[mob_id], dx, dy))
+
+            # Check for blocks (skip grass and path)
+            block_type = int(map_view[x, y])
+            if block_type not in [BlockType.GRASS.value, BlockType.PATH.value,
+                                 BlockType.OUT_OF_BOUNDS.value, BlockType.INVALID.value]:
+                obj_info_list.append((BlockType(block_type).name.lower(), dx, dy))
+
+    # Filter to unique items (closest of each type) if requested
+    if unique_items:
+        closest_items = {}
+        for item_name, dx, dy in obj_info_list:
+            distance = abs(dx) + abs(dy)
+            if item_name not in closest_items or distance < closest_items[item_name][0]:
+                closest_items[item_name] = (distance, dx, dy)
+        obj_info_list = [(name, dx, dy) for name, (_, dx, dy) in closest_items.items()]
+
+    # Format environment description
+    if obj_info_list:
+        env_desc = "You see:\n" + "\n".join(
+            [f"- {name} {describe_loc(dx, dy)}" for name, dx, dy in obj_info_list]
+        )
+    else:
+        env_desc = "You see nothing away from you."
+
+    result += env_desc + "\n\n"
+    result += f"You face {facing_item} at your front.\n\n"
+
+    # Inventory and status section
+    status_lines = [
+        f"- health: {state.player_health}/9",
+        f"- food: {state.player_food}/9",
+        f"- drink: {state.player_drink}/9",
+        f"- energy: {state.player_energy}/9",
+    ]
+    result += "Your status:\n" + "\n".join(status_lines) + "\n\n"
+
+    # Inventory items
+    inventory_items = []
+    if state.inventory.wood > 0:
+        inventory_items.append(f"- wood: {state.inventory.wood}")
+    if state.inventory.stone > 0:
+        inventory_items.append(f"- stone: {state.inventory.stone}")
+    if state.inventory.coal > 0:
+        inventory_items.append(f"- coal: {state.inventory.coal}")
+    if state.inventory.iron > 0:
+        inventory_items.append(f"- iron: {state.inventory.iron}")
+    if state.inventory.diamond > 0:
+        inventory_items.append(f"- diamond: {state.inventory.diamond}")
+    if state.inventory.sapling > 0:
+        inventory_items.append(f"- sapling: {state.inventory.sapling}")
+    if state.inventory.wood_pickaxe > 0:
+        inventory_items.append(f"- wood_pickaxe: {state.inventory.wood_pickaxe}")
+    if state.inventory.stone_pickaxe > 0:
+        inventory_items.append(f"- stone_pickaxe: {state.inventory.stone_pickaxe}")
+    if state.inventory.iron_pickaxe > 0:
+        inventory_items.append(f"- iron_pickaxe: {state.inventory.iron_pickaxe}")
+    if state.inventory.wood_sword > 0:
+        inventory_items.append(f"- wood_sword: {state.inventory.wood_sword}")
+    if state.inventory.stone_sword > 0:
+        inventory_items.append(f"- stone_sword: {state.inventory.stone_sword}")
+    if state.inventory.iron_sword > 0:
+        inventory_items.append(f"- iron_sword: {state.inventory.iron_sword}")
+
+    if inventory_items:
+        result += "Your inventory:\n" + "\n".join(inventory_items)
+    else:
+        result += "You have nothing in your inventory."
+
+    return result.strip()
