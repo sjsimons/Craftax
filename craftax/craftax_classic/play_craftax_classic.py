@@ -70,6 +70,7 @@ class CraftaxRenderer:
         pygame.key.set_repeat(250, 75)
 
         self.screen_surface = pygame.display.set_mode(self.screen_size)
+        pygame.display.set_caption("Craftax Classic")
 
         self._render = jax.jit(render_craftax_pixels, static_argnums=(1,))
 
@@ -131,6 +132,7 @@ def main(args):
 
     renderer = CraftaxRenderer(env, env_params, pixel_render_size=pixel_render_size)
     renderer.render(env_state)
+    renderer.update()
 
     step_fn = jax.jit(env.step)
 
