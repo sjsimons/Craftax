@@ -1,5 +1,10 @@
 import argparse
+import bz2
+import pickle
 import sys
+import time
+from pathlib import Path
+from typing import Any
 
 import pygame
 
@@ -39,6 +44,11 @@ KEY_MAPPING = {
     pygame.K_5: Action.MAKE_STONE_SWORD,
     pygame.K_6: Action.MAKE_IRON_SWORD,
 }
+
+
+def save_compressed_pickle(title: str, data: Any):
+    with bz2.BZ2File(title + ".pbz2", "w") as f:
+        pickle.dump(data, f)
 
 
 class CraftaxRenderer:
@@ -124,6 +134,8 @@ def main(args):
 
     step_fn = jax.jit(env.step)
 
+    traj_history = {"state": [env_state], "action": [], "reward": [], "done": []}
+
     clock = pygame.time.Clock()
 
     while not renderer.is_quit_requested():
@@ -141,15 +153,27 @@ def main(args):
             if reward > 0.01 or reward < -0.01:
                 print(f"Reward: {reward}\n")
 
+            traj_history["state"].append(env_state)
+            traj_history["action"].append(action)
+            traj_history["reward"].append(reward)
+            traj_history["done"].append(done)
+
             renderer.render(env_state)
 
         renderer.update()
         clock.tick(args.fps)
 
+    if args.save_trajectories:
+        save_name = f"play_data/trajectories_{int(time.time())}"
+        save_name += ".pkl"
+        Path("play_data").mkdir(parents=True, exist_ok=True)
+        save_compressed_pickle(save_name, traj_history)
+
 
 def entry_point():
     parser = argparse.ArgumentParser()
     parser.add_argument("--debug", action="store_true")
+    parser.add_argument("--save_trajectories", action="store_true")
     parser.add_argument("--fps", type=int, default=60)
 
     args, rest_args = parser.parse_known_args(sys.argv[1:])
